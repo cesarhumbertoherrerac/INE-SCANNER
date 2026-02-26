@@ -22,14 +22,16 @@ def order_points(pts):
     return rect
 
 def scan_document(image_bytes):
+
     file_bytes = np.asarray(bytearray(image_bytes), dtype=np.uint8)
     image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
+    # --- Detectar documento ---
     ratio = image.shape[0] / 500.0
     orig = image.copy()
-    image = cv2.resize(image, (int(image.shape[1] / ratio), 500))
+    resized = cv2.resize(image, (int(image.shape[1] / ratio), 500))
 
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (5, 5), 0)
     edged = cv2.Canny(gray, 75, 200)
 
@@ -37,9 +39,11 @@ def scan_document(image_bytes):
     contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
 
     screenCnt = None
+
     for c in contours:
         peri = cv2.arcLength(c, True)
         approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+
         if len(approx) == 4:
             screenCnt = approx
             break
@@ -63,19 +67,15 @@ def scan_document(image_bytes):
         [0, 0],
         [maxWidth - 1, 0],
         [maxWidth - 1, maxHeight - 1],
-        [0, maxHeight - 1]], dtype="float32")
+        [0, maxHeight - 1]
+    ], dtype="float32")
 
     M = cv2.getPerspectiveTransform(rect, dst)
     warped = cv2.warpPerspective(orig, M, (maxWidth, maxHeight))
 
-scan = cv2.bilateralFilter(warped, 7, 50, 50)
-alpha = 1.1
-beta = 5
-scan = cv2.convertScaleAbs(scan, alpha=alpha, beta=beta)
-kernel = np.array([[0, -1, 0],
-                   [-1, 4.2,-1],
-                   [0, -1, 0]])
-scan = cv2.filter2D(scan, -1, kernel)
+    # --- Solo retoque fino (NO blanco y negro) ---
+    scan = cv2.bilateralFilter(warped, 9, 75, 75)
+    scan = cv2.convertScaleAbs(scan, alpha=1.05, beta=5)
 
     return scan
 
