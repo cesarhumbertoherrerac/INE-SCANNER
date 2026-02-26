@@ -68,10 +68,14 @@ def scan_document(image_bytes):
     M = cv2.getPerspectiveTransform(rect, dst)
     warped = cv2.warpPerspective(orig, M, (maxWidth, maxHeight))
 
-    gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
-    scan = cv2.adaptiveThreshold(gray, 255,
-                                 cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                 cv2.THRESH_BINARY, 11, 2)
+   lab = cv2.cvtColor(warped, cv2.COLOR_BGR2LAB)
+l, a, b = cv2.split(lab)
+
+clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+cl = clahe.apply(l)
+
+limg = cv2.merge((cl,a,b))
+scan = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
 
     return scan
 
