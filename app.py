@@ -68,14 +68,10 @@ def scan_document(image_bytes):
     M = cv2.getPerspectiveTransform(rect, dst)
     warped = cv2.warpPerspective(orig, M, (maxWidth, maxHeight))
 
-   lab = cv2.cvtColor(warped, cv2.COLOR_BGR2LAB)
-l, a, b = cv2.split(lab)
-
-clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
-cl = clahe.apply(l)
-
-limg = cv2.merge((cl,a,b))
-scan = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+scan = cv2.detailEnhance(warped, sigma_s=10, sigma_r=0.15)
+alpha = 1.2  # contraste
+beta = 10    # brillo
+scan = cv2.convertScaleAbs(scan, alpha=alpha, beta=beta)
 
     return scan
 
