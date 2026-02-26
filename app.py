@@ -51,6 +51,11 @@ def find_document_contour(resized):
     adaptive = cv2.bitwise_not(adaptive)
 
     edges = cv2.bitwise_or(canny, adaptive)
+
+    # Máscara de baja saturación: la INE suele ser menos saturada que fondos de tela/flores.
+    hsv = cv2.cvtColor(resized, cv2.COLOR_BGR2HSV)
+    low_sat = cv2.inRange(hsv, (0, 0, 40), (179, 95, 255))
+    edges = cv2.bitwise_or(edges, low_sat)
     kernel = np.ones((3, 3), np.uint8)
     edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=2)
 
@@ -87,6 +92,38 @@ def find_document_contour(resized):
             return box.astype("float32")
 
     return None
+
+
+def tighten_crop(warped_bgr):
+    gray = cv2.cvtColor(warped_bgr, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(blur, 40, 130)
+    kernel = np.ones((3, 3), np.uint8)
+    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return warped_bgr
+
+    h, w = warped_bgr.shape[:2]
+    total_area = h * w
+    best = max(contours, key=cv2.contourArea)
+    area = cv2.contourArea(best)
+
+    # Evitar recortes erróneos por ruido interno de la credencial.
+    if area < total_area * 0.65:
+        return warped_bgr
+
+    x, y, cw, ch = cv2.boundingRect(best)
+    if cw < 40 or ch < 40:
+        return warped_bgr
+
+    # Expandir 2 px para no cortar letras pegadas al borde.
+    x0 = max(0, x - 2)
+    y0 = max(0, y - 2)
+    x1 = min(w, x + cw + 2)
+    y1 = min(h, y + ch + 2)
+    return warped_bgr[y0:y1, x0:x1]
 
 
 def apply_natural_tone(image_bgr):
@@ -151,7 +188,8 @@ def scan_document(image_bytes):
 
     transform = cv2.getPerspectiveTransform(rect, destination)
     warped = cv2.warpPerspective(orig, transform, (max_width, max_height))
-    return apply_natural_tone(warped)
+    tightened = tighten_crop(warped)
+    return apply_natural_tone(tightened)
 
 
 @app.route("/scan", methods=["POST"])
