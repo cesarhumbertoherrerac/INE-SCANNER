@@ -26,12 +26,35 @@ def order_points(pts):
 
 def _candidate_quad_from_contour(contour):
     perimeter = cv2.arcLength(contour, True)
-    approx = cv2.approxPolyDP(contour, 0.02 * perimeter, True)
 
-    if len(approx) == 4 and cv2.isContourConvex(approx):
-        return approx.reshape(4, 2).astype("float32")
+    for epsilon_factor in (0.015, 0.02, 0.03):
+        approx = cv2.approxPolyDP(contour, epsilon_factor * perimeter, True)
+        if len(approx) == 4 and cv2.isContourConvex(approx):
+            return approx.reshape(4, 2).astype("float32")
 
     return None
+
+
+def _quad_quality_score(quad, image_area):
+    rect = order_points(quad)
+    width = max(np.linalg.norm(rect[1] - rect[0]), np.linalg.norm(rect[2] - rect[3]))
+    height = max(np.linalg.norm(rect[3] - rect[0]), np.linalg.norm(rect[2] - rect[1]))
+    if width <= 0 or height <= 0:
+        return -1.0
+
+    ratio = width / height
+    if ratio < 1.2 or ratio > 2.2:
+        return -1.0
+
+    area = cv2.contourArea(rect.astype(np.float32))
+    if area <= 0:
+        return -1.0
+
+    # Penalizar quads muy lejos del ratio esperado de una INE (~1.58)
+    ratio_score = max(0.0, 1.0 - abs(ratio - 1.58) / 0.9)
+    area_score = min(1.0, area / (image_area * 0.92))
+
+    return 0.6 * area_score + 0.4 * ratio_score
 
 
 def find_document_contour(resized):
@@ -52,10 +75,11 @@ def find_document_contour(resized):
 
     edges = cv2.bitwise_or(canny, adaptive)
 
-    # Máscara de baja saturación: la INE suele ser menos saturada que fondos de tela/flores.
+    # La credencial suele tener saturación baja/media, útil contra fondos muy coloridos.
     hsv = cv2.cvtColor(resized, cv2.COLOR_BGR2HSV)
-    low_sat = cv2.inRange(hsv, (0, 0, 40), (179, 95, 255))
+    low_sat = cv2.inRange(hsv, (0, 0, 35), (179, 100, 255))
     edges = cv2.bitwise_or(edges, low_sat)
+
     kernel = np.ones((3, 3), np.uint8)
     edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=2)
 
@@ -65,64 +89,87 @@ def find_document_contour(resized):
     image_h, image_w = resized.shape[:2]
     image_area = image_h * image_w
 
-    for contour in contours[:30]:
+    best_quad = None
+    best_score = -1.0
+
+    for contour in contours[:35]:
         area = cv2.contourArea(contour)
-        if area < image_area * 0.08:
+        if area < image_area * 0.06:
             continue
 
         quad = _candidate_quad_from_contour(contour)
         if quad is None:
             continue
 
-        rect = order_points(quad)
-        width = max(np.linalg.norm(rect[1] - rect[0]), np.linalg.norm(rect[2] - rect[3]))
-        height = max(np.linalg.norm(rect[3] - rect[0]), np.linalg.norm(rect[2] - rect[1]))
+        score = _quad_quality_score(quad, image_area)
+        if score > best_score:
+            best_score = score
+            best_quad = quad
 
-        if height <= 0 or width <= 0:
+    if best_quad is not None:
+        return best_quad
+
+    # Fallback: usar minAreaRect del mejor contorno grande.
+    for contour in contours[:8]:
+        if cv2.contourArea(contour) < image_area * 0.1:
             continue
-
-        ratio = width / height
-        if 1.2 <= ratio <= 2.2:
-            return quad
-
-    if contours:
-        largest = contours[0]
-        if cv2.contourArea(largest) >= image_area * 0.1:
-            box = cv2.boxPoints(cv2.minAreaRect(largest))
-            return box.astype("float32")
+        box = cv2.boxPoints(cv2.minAreaRect(contour))
+        return box.astype("float32")
 
     return None
 
 
 def tighten_crop(warped_bgr):
     gray = cv2.cvtColor(warped_bgr, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape[:2]
+
+    # 1) Recorte por contenido no-negro (útil cuando el warp deja margen oscuro en un lado).
+    mask = gray > 20
+    ys, xs = np.where(mask)
+    if len(xs) > 0 and len(ys) > 0:
+        x0, x1 = xs.min(), xs.max()
+        y0, y1 = ys.min(), ys.max()
+
+        if (x1 - x0) > w * 0.55 and (y1 - y0) > h * 0.55:
+            warped_bgr = warped_bgr[max(0, y0 - 2) : min(h, y1 + 3), max(0, x0 - 2) : min(w, x1 + 3)]
+            gray = cv2.cvtColor(warped_bgr, cv2.COLOR_BGR2GRAY)
+            h, w = gray.shape[:2]
+
+    # 2) Ajuste fino usando proyección de bordes para remover espacio sobrante en un lado.
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    edges = cv2.Canny(blur, 40, 130)
+    edges = cv2.Canny(blur, 45, 140)
     kernel = np.ones((3, 3), np.uint8)
     edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=2)
 
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
+    col_strength = edges.sum(axis=0).astype(np.float32)
+    row_strength = edges.sum(axis=1).astype(np.float32)
+
+    if col_strength.max() <= 0 or row_strength.max() <= 0:
         return warped_bgr
 
-    h, w = warped_bgr.shape[:2]
-    total_area = h * w
-    best = max(contours, key=cv2.contourArea)
-    area = cv2.contourArea(best)
+    col_thr = col_strength.max() * 0.14
+    row_thr = row_strength.max() * 0.14
 
-    # Evitar recortes erróneos por ruido interno de la credencial.
-    if area < total_area * 0.65:
+    x_left_candidates = np.where(col_strength > col_thr)[0]
+    y_top_candidates = np.where(row_strength > row_thr)[0]
+
+    if len(x_left_candidates) == 0 or len(y_top_candidates) == 0:
         return warped_bgr
 
-    x, y, cw, ch = cv2.boundingRect(best)
-    if cw < 40 or ch < 40:
+    x_left = int(x_left_candidates[0])
+    x_right = int(x_left_candidates[-1])
+    y_top = int(y_top_candidates[0])
+    y_bottom = int(y_top_candidates[-1])
+
+    if (x_right - x_left) < w * 0.55 or (y_bottom - y_top) < h * 0.55:
         return warped_bgr
 
-    # Expandir 2 px para no cortar letras pegadas al borde.
-    x0 = max(0, x - 2)
-    y0 = max(0, y - 2)
-    x1 = min(w, x + cw + 2)
-    y1 = min(h, y + ch + 2)
+    margin = 2
+    x0 = max(0, x_left - margin)
+    y0 = max(0, y_top - margin)
+    x1 = min(w, x_right + margin + 1)
+    y1 = min(h, y_bottom + margin + 1)
+
     return warped_bgr[y0:y1, x0:x1]
 
 
