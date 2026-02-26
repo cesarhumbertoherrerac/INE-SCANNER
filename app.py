@@ -68,10 +68,14 @@ def scan_document(image_bytes):
     M = cv2.getPerspectiveTransform(rect, dst)
     warped = cv2.warpPerspective(orig, M, (maxWidth, maxHeight))
 
-scan = cv2.detailEnhance(warped, sigma_s=10, sigma_r=0.15)
-alpha = 1.2  # contraste
-beta = 10    # brillo
+scan = cv2.bilateralFilter(warped, 7, 50, 50)
+alpha = 1.1
+beta = 5
 scan = cv2.convertScaleAbs(scan, alpha=alpha, beta=beta)
+kernel = np.array([[0, -1, 0],
+                   [-1, 4.2,-1],
+                   [0, -1, 0]])
+scan = cv2.filter2D(scan, -1, kernel)
 
     return scan
 
