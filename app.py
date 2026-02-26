@@ -23,17 +23,19 @@ def order_points(pts):
 
 def scan_document(image_bytes):
 
+    # Convertir bytes a imagen
     file_bytes = np.asarray(bytearray(image_bytes), dtype=np.uint8)
     image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
-    # --- Detectar documento ---
-    ratio = image.shape[0] / 500.0
     orig = image.copy()
+
+    # ========= DETECCIÓN DE BORDES =========
+    ratio = image.shape[0] / 500.0
     resized = cv2.resize(image, (int(image.shape[1] / ratio), 500))
 
     gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (5, 5), 0)
-    edged = cv2.Canny(gray, 75, 200)
+    edged = cv2.Canny(gray, 50, 150)
 
     contours, _ = cv2.findContours(edged.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
@@ -48,10 +50,12 @@ def scan_document(image_bytes):
             screenCnt = approx
             break
 
+    # Si no detecta documento, regresar imagen original
     if screenCnt is None:
         return orig
 
     pts = screenCnt.reshape(4, 2) * ratio
+
     rect = order_points(pts)
     (tl, tr, br, bl) = rect
 
@@ -73,24 +77,22 @@ def scan_document(image_bytes):
     M = cv2.getPerspectiveTransform(rect, dst)
     warped = cv2.warpPerspective(orig, M, (maxWidth, maxHeight))
 
-   # ===== BALANCE DE BLANCOS =====
-result = cv2.cvtColor(warped, cv2.COLOR_BGR2LAB)
-l, a, b = cv2.split(result)
+    # ========= BALANCE DE BLANCOS REAL =========
+    result = cv2.cvtColor(warped, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(result)
 
-# Ajustar luminosidad
-l = cv2.equalizeHist(l)
+    # CLAHE para mejorar luminosidad sin dañar color
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    l = clahe.apply(l)
 
-result = cv2.merge((l, a, b))
-result = cv2.cvtColor(result, cv2.COLOR_LAB2BGR)
+    result = cv2.merge((l, a, b))
+    result = cv2.cvtColor(result, cv2.COLOR_LAB2BGR)
 
-# ===== CONTRASTE SUAVE =====
-alpha = 1.05   # contraste muy ligero
-beta = 3       # brillo muy ligero
-
-result = cv2.convertScaleAbs(result, alpha=alpha, beta=beta)
+    # ========= CORRECCIÓN SUAVE DE COLOR =========
+    result = cv2.convertScaleAbs(result, alpha=1.08, beta=5)
 
     return scan
-
+    
 @app.route("/scan", methods=["POST"])
 def scan():
     file = request.files["file"]
