@@ -73,9 +73,21 @@ def scan_document(image_bytes):
     M = cv2.getPerspectiveTransform(rect, dst)
     warped = cv2.warpPerspective(orig, M, (maxWidth, maxHeight))
 
-    # --- Solo retoque fino (NO blanco y negro) ---
-    scan = cv2.bilateralFilter(warped, 9, 75, 75)
-    scan = cv2.convertScaleAbs(scan, alpha=1.05, beta=5)
+   # ===== BALANCE DE BLANCOS =====
+result = cv2.cvtColor(warped, cv2.COLOR_BGR2LAB)
+l, a, b = cv2.split(result)
+
+# Ajustar luminosidad
+l = cv2.equalizeHist(l)
+
+result = cv2.merge((l, a, b))
+result = cv2.cvtColor(result, cv2.COLOR_LAB2BGR)
+
+# ===== CONTRASTE SUAVE =====
+alpha = 1.05   # contraste muy ligero
+beta = 3       # brillo muy ligero
+
+result = cv2.convertScaleAbs(result, alpha=alpha, beta=beta)
 
     return scan
 
