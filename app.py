@@ -7,6 +7,10 @@ import os
 
 app = Flask(__name__)
 
+@app.route("/")
+def home():
+    return "INE Scanner API is running"
+    
 def order_points(pts):
     rect = np.zeros((4, 2), dtype="float32")
     s = pts.sum(axis=1)
