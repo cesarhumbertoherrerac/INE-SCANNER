@@ -7,26 +7,32 @@ import os
 
 app = Flask(__name__)
 
-
 @app.route("/")
 def home():
-    return "INE Scanner API is running"
+    return "INE Scanner API running"
 
 
 def order_points(pts):
     rect = np.zeros((4, 2), dtype="float32")
+
     s = pts.sum(axis=1)
     rect[0] = pts[np.argmin(s)]
     rect[2] = pts[np.argmax(s)]
+
     diff = np.diff(pts, axis=1)
     rect[1] = pts[np.argmin(diff)]
     rect[3] = pts[np.argmax(diff)]
+
     return rect
+
 
 def scan_document(image_bytes):
 
     file_bytes = np.asarray(bytearray(image_bytes), dtype=np.uint8)
     image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+
+    if image is None:
+        return None
 
     orig = image.copy()
 
@@ -55,12 +61,12 @@ def scan_document(image_bytes):
         return orig
 
     pts = screenCnt.reshape(4, 2) * ratio
-
     rect = order_points(pts)
+
     (tl, tr, br, bl) = rect
 
-    # -------- MARGEN DINÁMICO --------
-    margin = 0.04  # 4% del tamaño
+    # --------- MARGEN DINÁMICO ---------
+    margin = 0.05  # 5%
 
     width = np.linalg.norm(tr - tl)
     height = np.linalg.norm(tl - bl)
@@ -96,3 +102,26 @@ def scan_document(image_bytes):
     return warped
 
 
+@app.route("/scan", methods=["POST"])
+def scan():
+    file = request.files.get("file")
+
+    if not file:
+        return "No file uploaded", 400
+
+    processed = scan_document(file.read())
+
+    if processed is None:
+        return "Error processing image", 500
+
+    pil_img = Image.fromarray(cv2.cvtColor(processed, cv2.COLOR_BGR2RGB))
+    img_io = io.BytesIO()
+    pil_img.save(img_io, "JPEG", quality=95)
+    img_io.seek(0)
+
+    return send_file(img_io, mimetype="image/jpeg")
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
