@@ -130,13 +130,18 @@ def find_document_contour(resized):
 
 
 def refine_quad_corners(resized_bgr, quad):
+    """Refina esquinas; si falla OpenCV regresa esquinas ordenadas sin romper el flujo."""
     gray = cv2.cvtColor(resized_bgr, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (3, 3), 0)
 
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 35, 0.01)
     corners = order_points(quad).reshape(-1, 1, 2).astype(np.float32)
-    cv2.cornerSubPix(gray, corners, (9, 9), (-1, -1), criteria)
-    return corners.reshape(4, 2)
+
+    try:
+        cv2.cornerSubPix(gray, corners, (9, 9), (-1, -1), criteria)
+        return corners.reshape(4, 2)
+    except cv2.error:
+        return corners.reshape(4, 2)
 
 
 def center_document(warped_bgr):
@@ -171,6 +176,9 @@ def center_document(warped_bgr):
     # centrar en un lienzo con ratio INE aproximado (1.58) sin perder contenido
     ch, cw = cropped.shape[:2]
     target_ratio = 1.58
+    if ch == 0 or cw == 0:
+        return warped_bgr
+
     current_ratio = cw / float(ch)
 
     if current_ratio < target_ratio:
@@ -225,7 +233,8 @@ def scan_document(image_bytes):
     orig = image.copy()
     target_height = 1000
     ratio = image.shape[0] / float(target_height)
-    resized = cv2.resize(image, (int(image.shape[1] / ratio), target_height))
+    resized_w = max(1, int(image.shape[1] / ratio))
+    resized = cv2.resize(image, (resized_w, target_height))
 
     screen_cnt = find_document_contour(resized)
     if screen_cnt is None:
@@ -268,6 +277,10 @@ def scan():
         processed = scan_document(file.read())
     except ValueError as exc:
         return {"error": str(exc)}, 400
+    except cv2.error:
+        return {"error": "No se pudo procesar la imagen con OpenCV"}, 400
+    except Exception:
+        return {"error": "Error interno al procesar la imagen"}, 500
 
     processed_rgb = cv2.cvtColor(processed, cv2.COLOR_BGR2RGB)
 
